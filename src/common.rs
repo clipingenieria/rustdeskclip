@@ -2609,7 +2609,8 @@ pub fn read_custom_client(config: &str) {
         log::error!("Failed to decode custom client config");
         return;
     };
-    const KEY: &str = "5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM=";
+    // Clip Ingenieria: clave pública propia para verificar custom.txt (la privada NO está en el repositorio)
+    const KEY: &str = "r2dkHyLUnazX9KV8A8kPNEhk/K55QI/2W1/d+/h7DNg=";
     let Some(pk) = get_rs_pk(KEY) else {
         log::error!("Failed to parse public key of custom client");
         return;
