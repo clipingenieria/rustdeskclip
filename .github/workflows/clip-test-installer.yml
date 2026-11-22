@@ -1,0 +1,125 @@
+# Prueba automática del instalador de Clip Remote en un Windows real.
+# Usa un instalador de PRUEBAS (contraseña desechable, solo registra en una libreta de pruebas).
+name: Clip - Prueba del instalador
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release con el instalador de pruebas
+        default: ci-installer
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prueba:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Preparar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\ci, C:\ci\logs | Out-Null
+          $u = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/RustDesk-Setup-CI.exe"
+          Invoke-WebRequest $u -OutFile C:\ci\RustDesk-Setup-CI.exe
+          "Sesiones:"; query user 2>&1; qwinsta 2>&1
+          @'
+          function Get-RD {
+            Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" | ForEach-Object {
+              $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner
+              [pscustomobject]@{ PID = $_.ProcessId; Usuario = $o.User; Sesion = $_.SessionId; Cmd = $_.CommandLine }
+            }
+          }
+          function Server-Logs { (Get-ChildItem "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server" -ErrorAction SilentlyContinue | Measure-Object).Count }
+          function Check-Estable([string]$nombre, [int]$segundos = 60) {
+            Write-Host "==================== COMPROBACIÓN: $nombre ===================="
+            Write-Host ("Servicio: " + (Get-Service RustDesk -ErrorAction SilentlyContinue).Status)
+            Write-Host ("custom.txt: " + (Test-Path "C:\Program Files\RustDesk\custom.txt"))
+            $l0 = Server-Logs
+            $pids = @()
+            for ($i = 0; $i -lt ($segundos / 10); $i++) {
+              $srv = Get-RD | Where-Object { $_.Usuario -eq 'SYSTEM' -and $_.Cmd -like '*--server*' } | Select-Object -First 1
+              $pids += $(if ($srv) { $srv.PID } else { 0 })
+              Start-Sleep 10
+            }
+            $l1 = Server-Logs
+            Write-Host "Procesos de RustDesk al final:"; Get-RD | Format-Table -AutoSize | Out-String -Width 300 | Write-Host
+            Write-Host "PID del servidor del sistema cada 10 s: $($pids -join ', ')"
+            Write-Host "Archivos de registro del servidor: $l0 -> $l1"
+            $unicos = @($pids | Select-Object -Unique).Count
+            [bool]$ok = ($pids -notcontains 0) -and ($unicos -eq 1) -and (($l1 - $l0) -le 2) -and ((Get-Service RustDesk).Status -eq 'Running')
+            Write-Host $(if ($ok) { "RESULTADO ${nombre}: OK (servidor del sistema estable)" } else { "RESULTADO ${nombre}: FALLO" })
+            return $ok
+          }
+          function Run-Installer([string]$nombre) {
+            Write-Host "==================== INSTALADOR: $nombre ===================="
+            $t = Get-Date
+            $p = Start-Process C:\ci\RustDesk-Setup-CI.exe -ArgumentList '/quiet' -PassThru -Wait
+            Write-Host "Código de salida: $($p.ExitCode)  (duración: $([int]((Get-Date)-$t).TotalSeconds) s)"
+            Get-Content C:\ProgramData\RustDesk-Setup.log -ErrorAction SilentlyContinue | Select-Object -Last 30 | Write-Host
+            return [bool]($p.ExitCode -eq 0)
+          }
+          '@ | Set-Content C:\ci\lib.ps1 -Encoding UTF8
+
+      - name: "Escenario 1: instalación limpia"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          $a = Run-Installer "limpia"
+          $b = Check-Estable "limpia" 60
+          "ESCENARIO1=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
+
+      - name: "Escenario 2: reinstalar con RustDesk ya instalado"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          $a = Run-Installer "reinstalar"
+          $b = Check-Estable "reinstalar" 60
+          "ESCENARIO2=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
+
+      - name: "Escenario 3: reinstalar con la ventana de RustDesk abierta"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          Start-Process "C:\Program Files\RustDesk\rustdesk.exe"
+          Start-Sleep 15
+          "Antes de instalar:"; Get-RD | Format-Table -AutoSize | Out-String -Width 300
+          $a = Run-Installer "con-ventana-abierta"
+          $b = Check-Estable "con-ventana-abierta" 60
+          "ESCENARIO3=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
+
+      - name: "Escenario 4: reproducir el fallo de CLIP20 y comprobar que el instalador lo arregla"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          "--- Provocando el fallo: servicio parado, abrir RustDesk (arranca su propio servidor de usuario), y luego arrancar el servicio ---"
+          Stop-Service RustDesk -Force; Start-Sleep 3
+          taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 2
+          Start-Process "C:\Program Files\RustDesk\rustdesk.exe"; Start-Sleep 20
+          Start-Service RustDesk
+          $fallo = -not (Check-Estable "fallo-provocado (se espera FALLO)" 40)
+          "¿Se reprodujo el fallo?: $fallo"
+          $a = Run-Installer "arreglar-fallo"
+          $b = Check-Estable "despues-de-arreglar" 90
+          "ESCENARIO4_REPRODUCIDO=$fallo" | Tee-Object -Append C:\ci\resultados.txt
+          "ESCENARIO4=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
+
+      - name: Resumen
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue
+          Copy-Item C:\ProgramData\RustDesk-Setup*.log C:\ci\logs\ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\service" C:\ci\logs\service -ErrorAction SilentlyContinue
+          Get-ChildItem "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 5 | Copy-Item -Destination (New-Item -ItemType Directory -Force C:\ci\logs\server)
+          Copy-Item C:\ci\resultados.txt C:\ci\logs\ -ErrorAction SilentlyContinue
+          if ((Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue) -match '^ESCENARIO[1-4]=False') { exit 1 }
+
+      - name: Guardar registros
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registros-prueba
+          path: C:\ci\logs
