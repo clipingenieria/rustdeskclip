@@ -1,0 +1,43 @@
+# Control: ¿el bucle lo provoca el custom.txt o simplemente reiniciar el servicio?
+name: Clip - Control reinicios
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  control:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    steps:
+      - name: Pruebas
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\d | Out-Null
+          $base = "https://github.com/${{ github.repository }}/releases/download"
+          Invoke-WebRequest "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\oficial.msi
+          Invoke-WebRequest "$base/clip-1.5.3-b2/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\clip.msi
+          Invoke-WebRequest "$base/ci-installer/custom-b.txt" -OutFile C:\d\custom-b.txt
+          function Server-Pid { $p = Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*--server*' } | Select-Object -First 1; if ($p) { $p.ProcessId } else { 0 } }
+          function Check([string]$n) {
+            Start-Sleep 12; $pids=@(); for($i=0;$i -lt 5;$i++){ $pids += Server-Pid; Start-Sleep 4 }
+            $ok = ($pids -notcontains 0) -and (@($pids|Select-Object -Unique).Count -eq 1)
+            Write-Host "### $n -> pids=[$($pids -join ',')] ESTABLE=$ok"
+          }
+          function Reiniciar { Restart-Service RustDesk -Force }
+          function Instalar([string]$m) { Start-Process msiexec -ArgumentList "/i $m /qn /norestart" -Wait; for($i=0;$i -lt 30 -and -not (Get-Service RustDesk -ErrorAction SilentlyContinue);$i++){Start-Sleep 2}; Start-Service RustDesk -ErrorAction SilentlyContinue }
+          function Quitar([string]$m) { Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; Start-Process msiexec -ArgumentList "/x $m /qn /norestart" -Wait; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 3; Remove-Item -Recurse -Force "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk" -ErrorAction SilentlyContinue }
+
+          Instalar C:\d\oficial.msi
+          Check "1a OFICIAL arranque"; Reiniciar; Check "1b OFICIAL reinicio 1"; Reiniciar; Check "1c OFICIAL reinicio 2"
+          Quitar C:\d\oficial.msi
+
+          Instalar C:\d\clip.msi
+          Check "2a CLIP sin custom arranque"; Reiniciar; Check "2b CLIP sin custom reinicio 1"; Reiniciar; Check "2c CLIP sin custom reinicio 2"
+          Stop-Service RustDesk -Force; Copy-Item C:\d\custom-b.txt "C:\Program Files\RustDesk\custom.txt"; Start-Service RustDesk
+          Check "3a CLIP CON custom"
+          Stop-Service RustDesk -Force; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Remove-Item "C:\Program Files\RustDesk\custom.txt"; Start-Service RustDesk
+          Check "3b CLIP custom quitado"
+          exit 0
