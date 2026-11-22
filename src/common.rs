@@ -2507,6 +2507,14 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
+    // Clip Ingenieria: configuración firmada incorporada en el binario (res/clip-custom.txt).
+    // Evita depender de un archivo custom.txt junto al ejecutable: su sola presencia hace que
+    // el proceso --server de Windows termine y se reinicie en bucle (verificado en Windows 2022).
+    const CLIP_EMBEDDED_CONFIG: &str = include_str!("../res/clip-custom.txt");
+    if !CLIP_EMBEDDED_CONFIG.trim().is_empty() {
+        read_custom_client(CLIP_EMBEDDED_CONFIG.trim());
+        return;
+    }
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
