@@ -1,7 +1,5 @@
-# Diagnóstico: ¿por qué se reinicia en bucle el servidor de RustDesk en la versión Clip?
-# Compara la versión oficial, la versión Clip sin custom.txt y con custom.txt.
+# Diagnóstico del bucle del servidor (oficial vs Clip sin/con custom.txt)
 name: Clip - Diagnostico servidor
-
 on:
   workflow_dispatch:
     inputs:
@@ -11,87 +9,89 @@ on:
       ci_tag:
         default: ci-installer
         type: string
-
 permissions:
   contents: read
-
 jobs:
   diagnostico:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - name: Preparar
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force C:\d, C:\d\logs | Out-Null
-          Invoke-WebRequest "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\oficial.msi
-          Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/${{ inputs.clip_tag }}/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\clip.msi
-          Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/${{ inputs.ci_tag }}/custom.txt" -OutFile C:\d\custom.txt
-          @'
-          $LogDir = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server"
-          function Server-Pid {
-            $p = Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*--server*' } | Select-Object -First 1
-            if ($p) { $p.ProcessId } else { 0 }
-          }
-          function Muestra([string]$nombre) {
-            Start-Sleep 15
-            $l0 = (Get-ChildItem $LogDir -ErrorAction SilentlyContinue | Measure-Object).Count
-            $pids = @(); for ($i=0; $i -lt 6; $i++) { $pids += Server-Pid; Start-Sleep 5 }
-            $l1 = (Get-ChildItem $LogDir -ErrorAction SilentlyContinue | Measure-Object).Count
-            $unicos = @($pids | Select-Object -Unique).Count
-            $estable = ($pids -notcontains 0) -and ($unicos -eq 1) -and (($l1-$l0) -le 1)
-            Write-Host "### $nombre -> servicio=$((Get-Service RustDesk -ErrorAction SilentlyContinue).Status) pids=[$($pids -join ',')] logs_servidor=$l0->$l1 ESTABLE=$estable"
-            "$nombre=$estable" | Add-Content C:\d\resultados.txt
-          }
-          function Instalar([string]$msi) { $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru; Write-Host "msiexec /i -> $($p.ExitCode)"; for($i=0;$i -lt 30 -and -not (Get-Service RustDesk -ErrorAction SilentlyContinue);$i++){Start-Sleep 2}; Start-Service RustDesk -ErrorAction SilentlyContinue }
-          function Desinstalar([string]$msi) { Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru; Write-Host "msiexec /x -> $($p.ExitCode)"; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 3; Remove-Item -Recurse -Force "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk" -ErrorAction SilentlyContinue }
-          '@ | Set-Content C:\d\lib.ps1 -Encoding UTF8
-
-      - name: "A: RustDesk oficial 1.5.3"
-        shell: pwsh
-        run: |
-          . C:\d\lib.ps1
-          Instalar C:\d\oficial.msi; Muestra "A_oficial"
-          Desinstalar C:\d\oficial.msi
-
-      - name: "B: versión Clip SIN custom.txt"
-        shell: pwsh
-        run: |
-          . C:\d\lib.ps1
-          Instalar C:\d\clip.msi; Muestra "B_clip_sin_custom"
-
-      - name: "C: versión Clip CON custom.txt"
-        shell: pwsh
-        run: |
-          . C:\d\lib.ps1
-          Stop-Service RustDesk -Force; Copy-Item C:\d\custom.txt "C:\Program Files\RustDesk\custom.txt"; Start-Service RustDesk
-          Muestra "C_clip_con_custom"
-
-      - name: "D: arrancar el servidor a mano para ver el error"
-        shell: pwsh
-        run: |
-          Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 2
-          $env:RUST_BACKTRACE = "1"
-          $p = Start-Process "C:\Program Files\RustDesk\rustdesk.exe" -ArgumentList "--server" -PassThru -RedirectStandardOutput C:\d\logs\server-stdout.txt -RedirectStandardError C:\d\logs\server-stderr.txt
+    - name: Preparar
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force C:\d, C:\d\logs | Out-Null
+        Invoke-WebRequest "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\oficial.msi
+        Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/${{ inputs.clip_tag }}/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\clip.msi
+        Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/${{ inputs.ci_tag }}/custom.txt" -OutFile C:\d\custom.txt
+        @'
+        $LogDir = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server"
+        function Server-Pid {
+          $p = Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*--server*' } | Select-Object -First 1
+          if ($p) { $p.ProcessId } else { 0 }
+        }
+        function Muestra([string]$nombre) {
           Start-Sleep 15
-          Write-Host "¿Sigue vivo tras 15 s?: $(-not $p.HasExited)  (código de salida: $($p.ExitCode))"
-          if (-not $p.HasExited) { Stop-Process $p -Force }
-          Write-Host "---- stderr ----"; Get-Content C:\d\logs\server-stderr.txt -ErrorAction SilentlyContinue | Select-Object -First 60
-          Write-Host "---- stdout ----"; Get-Content C:\d\logs\server-stdout.txt -ErrorAction SilentlyContinue | Select-Object -First 30
-          Write-Host "---- Visor de eventos (errores de aplicación de rustdesk) ----"
-          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -like '*rustdesk*' } | Select-Object -First 5 | ForEach-Object { "$($_.TimeCreated) $($_.ProviderName): $($_.Message)" }
-
-      - name: Resumen
-        if: always()
-        shell: pwsh
-        run: |
-          Get-Content C:\d\resultados.txt -ErrorAction SilentlyContinue
-          Copy-Item -Recurse "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log" C:\d\logs\rd-log -ErrorAction SilentlyContinue
-          Copy-Item C:\d\resultados.txt C:\d\logs\ -ErrorAction SilentlyContinue
-
-      - name: Guardar registros
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diagnostico
-          path: C:\d\logs
+          $l0 = (Get-ChildItem $LogDir -ErrorAction SilentlyContinue | Measure-Object).Count
+          $pids = @(); for ($i=0; $i -lt 6; $i++) { $pids += Server-Pid; Start-Sleep 5 }
+          $l1 = (Get-ChildItem $LogDir -ErrorAction SilentlyContinue | Measure-Object).Count
+          $unicos = @($pids | Select-Object -Unique).Count
+          $estable = ($pids -notcontains 0) -and ($unicos -eq 1) -and (($l1-$l0) -le 1)
+          Write-Host "### $nombre -> servicio=$((Get-Service RustDesk -ErrorAction SilentlyContinue).Status) pids=[$($pids -join ',')] logs_servidor=$l0->$l1 ESTABLE=$estable"
+          "$nombre=$estable" | Add-Content C:\d\resultados.txt
+        }
+        function Instalar([string]$msi) { $p = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru; Write-Host "msiexec /i -> $($p.ExitCode)"; for($i=0;$i -lt 30 -and -not (Get-Service RustDesk -ErrorAction SilentlyContinue);$i++){Start-Sleep 2}; Start-Service RustDesk -ErrorAction SilentlyContinue }
+        function Desinstalar([string]$msi) { Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; $p = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru; Write-Host "msiexec /x -> $($p.ExitCode)"; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 3; Remove-Item -Recurse -Force "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk" -ErrorAction SilentlyContinue }
+        '@ | Set-Content C:\d\lib.ps1 -Encoding UTF8
+    - name: 'A: RustDesk oficial 1.5.3'
+      shell: pwsh
+      run: |
+        . C:\d\lib.ps1
+        Instalar C:\d\oficial.msi; Muestra "A_oficial"
+        Desinstalar C:\d\oficial.msi
+        exit 0
+      continue-on-error: true
+    - name: 'B: versión Clip SIN custom.txt'
+      shell: pwsh
+      run: |
+        . C:\d\lib.ps1
+        Instalar C:\d\clip.msi; Muestra "B_clip_sin_custom"
+        exit 0
+      continue-on-error: true
+    - name: 'C: versión Clip CON custom.txt'
+      shell: pwsh
+      run: |
+        . C:\d\lib.ps1
+        Stop-Service RustDesk -Force; Copy-Item C:\d\custom.txt "C:\Program Files\RustDesk\custom.txt"; Start-Service RustDesk
+        Muestra "C_clip_con_custom"
+        exit 0
+      continue-on-error: true
+    - name: 'D: arrancar el servidor a mano para ver el error'
+      shell: pwsh
+      run: |
+        Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 2
+        $env:RUST_BACKTRACE = "1"
+        $p = Start-Process "C:\Program Files\RustDesk\rustdesk.exe" -ArgumentList "--server" -PassThru -RedirectStandardOutput C:\d\logs\server-stdout.txt -RedirectStandardError C:\d\logs\server-stderr.txt
+        Start-Sleep 15
+        Write-Host "¿Sigue vivo tras 15 s?: $(-not $p.HasExited)  (código de salida: $($p.ExitCode))"
+        if (-not $p.HasExited) { Stop-Process $p -Force }
+        Write-Host "---- stderr ----"; Get-Content C:\d\logs\server-stderr.txt -ErrorAction SilentlyContinue | Select-Object -First 60
+        Write-Host "---- stdout ----"; Get-Content C:\d\logs\server-stdout.txt -ErrorAction SilentlyContinue | Select-Object -First 30
+        Write-Host "---- Visor de eventos (errores de aplicación de rustdesk) ----"
+        Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -like '*rustdesk*' } | Select-Object -First 5 | ForEach-Object { "$($_.TimeCreated) $($_.ProviderName): $($_.Message)" }
+        exit 0
+      continue-on-error: true
+    - name: Resumen
+      if: always()
+      shell: pwsh
+      run: |
+        Get-Content C:\d\resultados.txt -ErrorAction SilentlyContinue
+        Copy-Item -Recurse "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log" C:\d\logs\rd-log -ErrorAction SilentlyContinue
+        Copy-Item C:\d\resultados.txt C:\d\logs\ -ErrorAction SilentlyContinue
+        exit 0
+      continue-on-error: true
+    - name: Guardar registros
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: diagnostico
+        path: C:\d\logs
