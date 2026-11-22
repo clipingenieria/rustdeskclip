@@ -63,7 +63,8 @@ jobs:
           }
           '@ | Set-Content C:\ci\lib.ps1 -Encoding UTF8
 
-      - name: "Escenario 1: instalación limpia"
+      - continue-on-error: true
+        name: "Escenario 1: instalación limpia"
         shell: pwsh
         run: |
           . C:\ci\lib.ps1
@@ -71,7 +72,8 @@ jobs:
           $b = Check-Estable "limpia" 60
           "ESCENARIO1=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
 
-      - name: "Escenario 2: reinstalar con RustDesk ya instalado"
+      - continue-on-error: true
+        name: "Escenario 2: reinstalar con RustDesk ya instalado"
         shell: pwsh
         run: |
           . C:\ci\lib.ps1
@@ -79,7 +81,8 @@ jobs:
           $b = Check-Estable "reinstalar" 60
           "ESCENARIO2=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
 
-      - name: "Escenario 3: reinstalar con la ventana de RustDesk abierta"
+      - continue-on-error: true
+        name: "Escenario 3: reinstalar con la ventana de RustDesk abierta"
         shell: pwsh
         run: |
           . C:\ci\lib.ps1
@@ -90,7 +93,8 @@ jobs:
           $b = Check-Estable "con-ventana-abierta" 60
           "ESCENARIO3=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
 
-      - name: "Escenario 4: reproducir el fallo de CLIP20 y comprobar que el instalador lo arregla"
+      - continue-on-error: true
+        name: "Escenario 4: reproducir el fallo de CLIP20 y comprobar que el instalador lo arregla"
         shell: pwsh
         run: |
           . C:\ci\lib.ps1
@@ -106,6 +110,22 @@ jobs:
           "ESCENARIO4_REPRODUCIDO=$fallo" | Tee-Object -Append C:\ci\resultados.txt
           "ESCENARIO4=$($a -and $b)" | Tee-Object -Append C:\ci\resultados.txt
 
+      - continue-on-error: true
+        name: "Escenario 5: equipo con un custom.txt sobrante (caso CLIP20)"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          Stop-Service RustDesk -Force; Start-Sleep 2
+          Set-Content "C:\Program Files\RustDesk\custom.txt" "archivo-sobrante-de-la-version-anterior" -NoNewline
+          Start-Service RustDesk
+          $fallo = -not (Check-Estable "con custom.txt sobrante (se espera FALLO)" 30)
+          $a = Run-Installer "limpiar-custom-sobrante"
+          $b = Check-Estable "despues-de-limpiar" 60
+          $c = -not (Test-Path "C:\Program Files\RustDesk\custom.txt")
+          Write-Host "custom.txt eliminado: $c"
+          "ESCENARIO5=$($a -and $b -and $c)" | Tee-Object -Append C:\ci\resultados.txt
+          exit 0
+
       - name: Resumen
         if: always()
         shell: pwsh
@@ -115,7 +135,7 @@ jobs:
           Copy-Item -Recurse "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\service" C:\ci\logs\service -ErrorAction SilentlyContinue
           Get-ChildItem "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 5 | Copy-Item -Destination (New-Item -ItemType Directory -Force C:\ci\logs\server)
           Copy-Item C:\ci\resultados.txt C:\ci\logs\ -ErrorAction SilentlyContinue
-          if ((Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue) -match '^ESCENARIO[1-4]=False') { exit 1 }
+          if ((Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue) -match '^ESCENARIO[1-5]=False') { exit 1 }
 
       - name: Guardar registros
         if: always()
