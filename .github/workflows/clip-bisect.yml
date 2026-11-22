@@ -1,0 +1,46 @@
+# Prueba por partes: qué opción del custom.txt hace que el servidor se reinicie en bucle.
+name: Clip - Prueba por opciones
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  opciones:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Preparar e instalar versión Clip (sin custom.txt)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\d | Out-Null
+          $base = "https://github.com/${{ github.repository }}/releases/download"
+          Invoke-WebRequest "$base/clip-1.5.3-b2/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\clip.msi
+          foreach ($k in 'a','b','c','d') { Invoke-WebRequest "$base/ci-installer/custom-$k.txt" -OutFile "C:\d\custom-$k.txt" }
+          $p = Start-Process msiexec -ArgumentList '/i C:\d\clip.msi /qn /norestart' -Wait -PassThru; "msiexec -> $($p.ExitCode)"
+          for ($i=0; $i -lt 30 -and -not (Get-Service RustDesk -ErrorAction SilentlyContinue); $i++) { Start-Sleep 2 }
+          exit 0
+
+      - name: Probar cada variante
+        shell: pwsh
+        run: |
+          function Server-Pid {
+            $p = Get-CimInstance Win32_Process -Filter "Name='rustdesk.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*--server*' } | Select-Object -First 1
+            if ($p) { $p.ProcessId } else { 0 }
+          }
+          $dir = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server"
+          foreach ($k in 'ninguno','a','b','c','d') {
+            Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; Start-Sleep 2
+            taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 2
+            Remove-Item "C:\Program Files\RustDesk\custom.txt" -ErrorAction SilentlyContinue
+            if ($k -ne 'ninguno') { Copy-Item "C:\d\custom-$k.txt" "C:\Program Files\RustDesk\custom.txt" }
+            Start-Service RustDesk; Start-Sleep 15
+            $l0 = (Get-ChildItem $dir -ErrorAction SilentlyContinue | Measure-Object).Count
+            $pids = @(); for ($i=0; $i -lt 6; $i++) { $pids += Server-Pid; Start-Sleep 5 }
+            $l1 = (Get-ChildItem $dir -ErrorAction SilentlyContinue | Measure-Object).Count
+            $ok = ($pids -notcontains 0) -and (@($pids | Select-Object -Unique).Count -eq 1)
+            Write-Host "### VARIANTE $k -> pids=[$($pids -join ',')] logs=$l0->$l1 ESTABLE=$ok"
+          }
+          exit 0
