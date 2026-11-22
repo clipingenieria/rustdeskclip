@@ -1,5 +1,5 @@
 # Prueba por partes: qué opción del custom.txt hace que el servidor se reinicie en bucle.
-name: Clip - Prueba por opciones
+name: Clip - Prueba por opciones (aislamiento)
 
 on:
   workflow_dispatch: {}
@@ -18,7 +18,7 @@ jobs:
           New-Item -ItemType Directory -Force C:\d | Out-Null
           $base = "https://github.com/${{ github.repository }}/releases/download"
           Invoke-WebRequest "$base/clip-1.5.3-b2/rustdesk-1.5.3-x86_64.msi" -OutFile C:\d\clip.msi
-          foreach ($k in 'a','b','c','d') { Invoke-WebRequest "$base/ci-installer/custom-$k.txt" -OutFile "C:\d\custom-$k.txt" }
+          foreach ($k in 'e1','e2','e3','e4') { Invoke-WebRequest "$base/ci-installer/custom-$k.txt" -OutFile "C:\d\custom-$k.txt" }
           $p = Start-Process msiexec -ArgumentList '/i C:\d\clip.msi /qn /norestart' -Wait -PassThru; "msiexec -> $($p.ExitCode)"
           for ($i=0; $i -lt 30 -and -not (Get-Service RustDesk -ErrorAction SilentlyContinue); $i++) { Start-Sleep 2 }
           exit 0
@@ -31,7 +31,7 @@ jobs:
             if ($p) { $p.ProcessId } else { 0 }
           }
           $dir = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server"
-          foreach ($k in 'ninguno','a','b','c','d') {
+          foreach ($k in 'ninguno','e1','e2','ninguno','e3','ninguno','e4','e4') {
             Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; Start-Sleep 2
             taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null; Start-Sleep 2
             Remove-Item "C:\Program Files\RustDesk\custom.txt" -ErrorAction SilentlyContinue
