@@ -126,6 +126,29 @@ jobs:
           "ESCENARIO5=$($a -and $b -and $c)" | Tee-Object -Append C:\ci\resultados.txt
           exit 0
 
+      - continue-on-error: true
+        name: "Escenario 6: equipo con el RustDesk oficial -> se reemplaza por Clip conservando el ID"
+        shell: pwsh
+        run: |
+          . C:\ci\lib.ps1
+          $toml = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk.toml"
+          function Es-Clip { $d = "C:\Program Files\RustDesk\librustdesk.dll"; (Test-Path $d) -and ([IO.File]::ReadAllText($d, [Text.Encoding]::ASCII).Contains("r2dkHyLUnazX9KV8A8kPNEhk/K55QI/2W1/d+/h7DNg=")) }
+          function Leer-ID { $m = Select-String -Path $toml -Pattern "^enc_id\s*=\s*'([^']+)'" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($m) { $m.Matches[0].Groups[1].Value } else { "" } }
+          Invoke-WebRequest "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.msi" -OutFile C:\ci\oficial.msi
+          Stop-Service RustDesk -Force -ErrorAction SilentlyContinue; taskkill /F /T /IM rustdesk.exe 2>&1 | Out-Null
+          $p = Start-Process msiexec -ArgumentList '/i C:\ci\oficial.msi /qn /norestart' -Wait -PassThru
+          Write-Host "Instalado el oficial encima: msiexec $($p.ExitCode)"
+          Start-Sleep 10; Start-Service RustDesk -ErrorAction SilentlyContinue; Start-Sleep 10
+          $esOficial = -not (Es-Clip); $id0 = Leer-ID
+          Write-Host "Antes: oficial=$esOficial ID=$id0"
+          $a = Run-Installer "oficial-a-clip"
+          $b = Check-Estable "oficial-a-clip" 60
+          $esClip = Es-Clip; $id1 = Leer-ID
+          Write-Host "Después: clip=$esClip ID=$id1"
+          Get-ChildItem "C:\Users\Public\Desktop","C:\ProgramData\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Write-Host
+          "ESCENARIO6=$($esOficial -and $a -and $b -and $esClip -and ($id0 -ne '') -and ($id0 -eq $id1))" | Tee-Object -Append C:\ci\resultados.txt
+          exit 0
+
       - name: Resumen
         if: always()
         shell: pwsh
@@ -135,7 +158,7 @@ jobs:
           Copy-Item -Recurse "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\service" C:\ci\logs\service -ErrorAction SilentlyContinue
           Get-ChildItem "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\log\server" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 5 | Copy-Item -Destination (New-Item -ItemType Directory -Force C:\ci\logs\server)
           Copy-Item C:\ci\resultados.txt C:\ci\logs\ -ErrorAction SilentlyContinue
-          if ((Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue) -match '^ESCENARIO[1-5]=False') { exit 1 }
+          if ((Get-Content C:\ci\resultados.txt -ErrorAction SilentlyContinue) -match '^ESCENARIO[1-6]=False') { exit 1 }
 
       - name: Guardar registros
         if: always()
